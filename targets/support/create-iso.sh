@@ -271,6 +271,46 @@ case ${clst_hostarch} in
 			echo 'Creating ISO with fingers crossed that you know what you are doing...'
 			run_mkisofs -J -R -l ${mkisofs_zisofs_opts} -V "${clst_iso_volume_id}" -o "${1}" "${clst_target_path}"/
 		fi
+
+		# Use same kernel, initrd and squashfs to generate PXE bootable files
+		iso="${1}"
+		dstpath=${iso%%.iso}
+		dstname=$(basename ${dstpath})
+		kernel=${clst_boot_kernel}
+		for x in ${clst_boot_kernel}
+		do
+		    kernel=${x}
+		done
+		echo "Copy kernel for use outside iso ${dstpath}.lkrn"
+		cp -vf "${clst_target_path}/boot/${kernel}" "${dstpath}.lkrn"
+		echo "Generate combined initrd + squashfs ${dstpath}.igz"
+		# change dir to get squashfs in current dir for correct cpio creation
+		pushd "${clst_target_path}"
+		# combine original initrd with squashfs
+		# different variants can be used, compression
+		# the selected combination here gives most responsive boot (avoids several seconds of black screen)
+		(cat "boot/${kernel}.igz" ; (echo image.${clst_fstype} | cpio -H newc -o)) > "${dstpath}.igz"
+		popd
+
+		# Generate kernel cmdline for use in iPXE script
+		if [ -z "${cmdline_opts}" ]
+		then
+			check_bootargs
+			check_filesystem_type
+		fi
+		default_append_line="root=/dev/ram0 init=/linuxrc ${cmdline_opts} cdroot"
+		ipxename="${dstpath}.ipxe"
+		echo "Generating iPXE script ${ipxename}"
+		echo '#!ipxe' > ${ipxename}
+		echo '# allow for external keymap setting' >> ${ipxename}
+		echo 'isset ${keymap} || set keymap dokeymap' >> ${ipxename}
+		echo '# allow for external cmdline options' >> ${ipxename}
+		echo 'isset ${cmdline} || set cmdline vga=791' >> ${ipxename}
+		# initrd= on cmdline is needed for efi
+		echo "kernel ${dstname}.lkrn ${default_append_line/dokeymap/\$\{keymap\}} initrd=${dstname}.igz \${cmdline}" >> ${ipxename}
+		echo "initrd ${dstname}.igz" >> ${ipxename}
+		echo 'imgstat' >> ${ipxename}
+		echo 'boot' >> ${ipxename}
 	;;
 esac
 exit  $?
